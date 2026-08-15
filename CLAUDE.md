@@ -72,10 +72,22 @@ categories/
   05-context-personalization.md
   06-multi-agent-tooling.md
   07-mcp.md
-  08-plugins.md
+  08-plugins.md             # GENERATED — see below, do not hand-edit
   09-slash-commands.md
   10-misc.md
 ```
+
+### `08-plugins.md` is generated, not authored
+
+`scripts/sync_marketplace.py` fetches `.claude-plugin/marketplace.json` from
+`danielrosehill/Claude-Code-Plugins` and regenerates `categories/08-plugins.md`
+wholesale. Hand-written entries there are silently destroyed on the next sync or
+build.
+
+To get a plugin into the index, register it in the **marketplace repo** — it then
+flows here automatically. A plugin repo that is not in the marketplace has no
+route into the Plugins category; file it under its topical category instead, or
+add it to the marketplace first.
 
 ### Building the Site
 
@@ -273,13 +285,108 @@ Badge format example:
 
 ## Repository Discovery
 
-In addition to the scratchpad workflow, you can proactively discover missing repositories by querying Daniel's GitHub account:
+In addition to the scratchpad workflow, run the discovery script to find public
+repos that are not yet in the index:
 
 ```bash
-gh repo list danielrosehill --limit 500 --visibility public --json name,description --jq '.[] | select(.name | test("claude|Claude"; "i"))'
+python3 scripts/discover_new_repos.py          # names matching /claude/
+python3 scripts/discover_new_repos.py --all    # every public repo
 ```
 
-This helps identify public Claude-related repositories that may not yet be in the index. Compare results against the category files to find candidates for addition.
+Results are written to `data/unindexed_repos.json`.
+
+Two traps this script has already fallen into, both fixed — do not reintroduce
+either:
+
+- **`gh repo list --limit` must exceed the account's total public repo count**
+  (>1050 as of Aug 2026). `gh` truncates silently, so a limit of 500 returned a
+  plausible-looking list while hiding every older candidate.
+- **The default pattern only matches `claude` in the repo *name*.** Genuinely
+  Claude Code-related repos named otherwise — `Document-As-You-Go`,
+  `Aliexpress-Shopper`, `Android-Media-Importer`, `Israel-Phonebook-Manager` —
+  are invisible to it. Periodically re-run with `--all`, or grep descriptions for
+  `claude|agentic|slash command|subagent|agent workspace`, and triage by hand.
+
+Compare results against the category files before adding anything; the script
+does not know which repos were deliberately excluded.
+
+## The deployed site
+
+Live at **https://claude.danielrosehill.com**, deployed by **Vercel** on push to
+`main` (`vercel.json` sets `outputDirectory: docs`). `docs/` is the committed
+Astro build output — so **run `npm run build` and commit the result**; this repo
+is not one where the build can be left to CI.
+
+`npm run build` is three steps: `build:data` (the Python pipeline that regenerates
+`README.md`, the split markdown pages and `data/*.json`), `build:site` (Astro), and
+`check:links`, which fails the build on a broken internal link.
+
+**Repo detail pages come from Astro, not Python.** `src/pages/repos/[...slug].astro`
+owns `/repos/<slug>/`. `build_site.py` used to render those pages too — 237 of them,
+from a duplicate HTML template — and `astro build` then overwrote every one. The
+Python copies still carried the pre-rename slug and none of the SEO metadata, and
+editing that template had no visible effect whatsoever. Removed 2026-08-10. If you
+need to change how a repo page looks, the `.astro` file is the only place.
+
+### SEO and machine-readable surfaces
+
+`astro.config.mjs` sets `site:` — this is load-bearing. Without it canonical URLs,
+Open Graph URLs and `@astrojs/sitemap` all silently produce nothing.
+
+`BaseLayout.astro` takes `description`, `image`, `isHome` and `schema` props and
+emits the canonical link, Open Graph and Twitter tags, and JSON-LD. **Pass a
+`description` on every new page** — the fallback is the site-wide one, which is
+fine for a stray page but poor if it ends up on many.
+
+| Surface | Source | Notes |
+| --- | --- | --- |
+| `/sitemap-index.xml` | `@astrojs/sitemap` | every page, generated |
+| `/robots.txt` | `public/robots.txt` | static; points at the sitemap |
+| `/llms.txt` | `src/pages/llms.txt.ts` | generated from `tagged_repos.json`, cannot drift |
+| `/browse/` | `src/pages/browse/index.astro` | static listing of every repo |
+| `/og-image.png` | `public/` | 1200×630 |
+
+**Why `/browse/` exists:** the home page renders its repo list client-side from
+`tagged_repos.json`, so a crawler that does not run JS sees only "Loading
+repositories…" and finds no repo links at all. `/browse/` is the static
+counterpart that puts all 236 in the initial HTML. Keep it working; do not fold it
+into the client-rendered index.
+
+### Dates: both are persisted, deliberately
+
+`created_date` (real GitHub creation date, `data/repo_created_dates.json`, filled
+by `scripts/fetch_created_dates.py`) drives the site's default "Newest" sort.
+`added_date` (`data/repo_added_dates.json`) is when the repo entered this index.
+
+Both files exist because both values used to be recomputed as *today* on every
+build whenever a lookup missed — `site_state.json` history is capped at 50 entries,
+so older repos fell off and got restamped. On 2026-08-10 that had left 125 of 236
+repos claiming they were created that day, which made the default sort meaningless.
+Never reintroduce a `datetime.now()` fallback that is not written back to disk.
+
+After adding repos, run `python3 scripts/fetch_created_dates.py` before building,
+or the new entries sort to the top with a fabricated date.
+
+## This repo's own name
+
+Canonical slug: **`danielrosehill/Claude-Code-Projects-Index`**. It has been
+renamed twice, and both former slugs still resolve via GitHub's rename redirect:
+
+| Former slug | Status |
+| --- | --- |
+| `Claude-Code-Repos-Index` | redirects |
+| `Claude-Agent-Blueprints` | redirects |
+
+The redirects make staleness invisible — a clone whose `origin` points at an old
+slug fetches and pushes perfectly well, and `gh api repos/<old-slug>` returns
+`200`. Resolve `.full_name` before trusting any slug. Consequences already hit:
+the local checkout sat 130 commits behind on a stale remote URL, and `10-misc.md`
+carried an entry for "Claude Agent Blueprints" — this repo listing *itself* under
+a dead name, with a description that had drifted. All three former names are in
+`SKIP_REPOS` in `scripts/discover_new_repos.py`.
+
+The local working copy's directory name may also lag the repo name; it is not
+authoritative.
 
 ## Notes
 
